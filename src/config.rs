@@ -1,5 +1,6 @@
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
+use std::env;
 
 #[derive(Debug, Clone)]
 pub struct InformationsConfig {
@@ -10,8 +11,8 @@ pub struct InformationsConfig {
     pub accretion_spawn_rate: f32,
     pub inner_radius: f32,
     pub outer_radius: f32,
-    pub outer_ring_spawn_zone_inner_radius: Option<f32>,
-    pub outer_ring_spawn_zone_outer_radius: Option<f32>,
+    pub outer_ring_spawn_zone_inner_ratio: f32,
+    pub outer_ring_spawn_zone_outer_ratio: f32,
     pub central_mass: f32,
     pub particle_mass_range: (f32, f32),
     pub inflow_strength: f32,
@@ -26,46 +27,94 @@ pub struct InformationsConfig {
     pub merge_angle: f32,
     pub repeated_angle: f32,
     pub flyby_angle: f32,
+    pub collision_interval: usize,
+    pub attract_interval: usize,
+    pub orbital_speed_multiplier: f32,
+    pub spawn_angular_speed_base: f32,
+    pub spawn_angular_speed_range: f32,
+    pub equatorial_growth_factor: f32,
+    pub polar_flattening_factor: f32,
+    pub radius_scale: f32,
+    pub depth_scale_factor: f32,
 }
 
 impl Default for InformationsConfig {
     fn default() -> Self {
         Self {
-            dt: 0.05,
-            n: 50000,
+            dt: 0.02,
+            n: 20000,
             theta: 1.0,
-            epsilon: 1.1,
-            accretion_spawn_rate: 0.1,
+            epsilon: 1.5,
+            accretion_spawn_rate: 0.001,
             inner_radius: 25.0,
-            outer_radius: 1118.03,
-            outer_ring_spawn_zone_inner_radius: None,
-            outer_ring_spawn_zone_outer_radius: None,
+            outer_radius: 818.03,
+            outer_ring_spawn_zone_inner_ratio: 0.82,
+            outer_ring_spawn_zone_outer_ratio: 1.0,
             central_mass: 1e6,
             particle_mass_range: (0.5, 2.0),
             inflow_strength: 0.025,
             restore_strength: 0.08,
-            galaxy_separation_factor: 5.0,
+            galaxy_separation_factor: 1.0,
             prob_merge: 0.35,
             prob_repeated: 0.35,
             prob_flyby: 0.30,
-            merge_speed_factor: 0.50,
+            merge_speed_factor: 0.10,
             repeated_speed_factor: 0.70,
             flyby_speed_factor: 0.90,
             merge_angle: 0.05,
             repeated_angle: 0.25,
             flyby_angle: 0.35,
+            collision_interval: 4,
+            attract_interval: 2,
+            orbital_speed_multiplier: 0.025,
+            spawn_angular_speed_base: 0.3,
+            spawn_angular_speed_range: 0.5,
+            equatorial_growth_factor: 0.18,
+            polar_flattening_factor: 0.14,
+            radius_scale: 0.25,
+            depth_scale_factor: 0.002,
         }
     }
 }
 
 impl InformationsConfig {
     pub fn load() -> Self {
-        let path = Path::new("informations.md");
-        let file_text = fs::read_to_string(path).unwrap_or_default();
+        // Versuche, den absoluten Pfad zu bestimmen (zuerst im Arbeitsverzeichnis, dann relativ zur Binary)
+        let mut possible_paths = vec![PathBuf::from("informations.md")];
+        if let Ok(exe) = env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                possible_paths.push(parent.join("informations.md"));
+            }
+        }
+
+        let mut file_text = String::new();
+        let mut file_found = false;
+
+        for path in &possible_paths {
+            if path.exists() {
+                match fs::read_to_string(path) {
+                    Ok(content) => {
+                        file_text = content;
+                        file_found = true;
+                        eprintln!("✓ Config geladen: {}", path.display());
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("✗ Fehler beim Lesen von {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+
+        if !file_found {
+            eprintln!("⚠ informations.md nicht gefunden. Verwende Standardwerte.");
+        }
+
         let mut config = InformationsConfig::default();
         let mut in_block = false;
+        let mut parse_errors = 0;
 
-        for line in file_text.lines() {
+        for (line_num, line) in file_text.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.starts_with("```config") {
                 in_block = true;
@@ -82,129 +131,64 @@ impl InformationsConfig {
                 if let Some((key, value)) = pair {
                     let key = key.trim();
                     let value = value.trim();
-                    match key {
-                        "dt" => {
-                            if let Ok(v) = value.parse() {
-                                config.dt = v;
-                            }
-                        }
-                        "n" => {
-                            if let Ok(v) = value.parse() {
-                                config.n = v;
-                            }
-                        }
-                        "theta" => {
-                            if let Ok(v) = value.parse() {
-                                config.theta = v;
-                            }
-                        }
-                        "epsilon" => {
-                            if let Ok(v) = value.parse() {
-                                config.epsilon = v;
-                            }
-                        }
-                        "accretion_spawn_rate" => {
-                            if let Ok(v) = value.parse() {
-                                config.accretion_spawn_rate = v;
-                            }
-                        }
-                        "inner_radius" => {
-                            if let Ok(v) = value.parse() {
-                                config.inner_radius = v;
-                            }
-                        }
-                        "outer_radius" => {
-                            if let Ok(v) = value.parse() {
-                                config.outer_radius = v;
-                            }
-                        }
-                        "outer_ring_spawn_zone_inner_radius" => {
-                            if let Ok(v) = value.parse() {
-                                config.outer_ring_spawn_zone_inner_radius = Some(v);
-                            }
-                        }
-                        "outer_ring_spawn_zone_outer_radius" => {
-                            if let Ok(v) = value.parse() {
-                                config.outer_ring_spawn_zone_outer_radius = Some(v);
-                            }
-                        }
-                        "central_mass" => {
-                            if let Ok(v) = value.parse() {
-                                config.central_mass = v;
-                            }
-                        }
+                    let parse_result = match key {
+                        "dt" => value.parse::<f32>().ok().map(|v| { config.dt = v; true }),
+                        "n" => value.parse::<usize>().ok().map(|v| { config.n = v; true }),
+                        "theta" => value.parse::<f32>().ok().map(|v| { config.theta = v; true }),
+                        "epsilon" => value.parse::<f32>().ok().map(|v| { config.epsilon = v; true }),
+                        "accretion_spawn_rate" => value.parse::<f32>().ok().map(|v| { config.accretion_spawn_rate = v; true }),
+                        "inner_radius" => value.parse::<f32>().ok().map(|v| { config.inner_radius = v; true }),
+                        "outer_radius" => value.parse::<f32>().ok().map(|v| { config.outer_radius = v; true }),
+                        "outer_ring_spawn_zone_inner_ratio" => value.parse::<f32>().ok().map(|v| { config.outer_ring_spawn_zone_inner_ratio = v; true }),
+                        "outer_ring_spawn_zone_outer_ratio" => value.parse::<f32>().ok().map(|v| { config.outer_ring_spawn_zone_outer_ratio = v; true }),
+                        "central_mass" => value.parse::<f32>().ok().map(|v| { config.central_mass = v; true }),
                         "particle_mass_range" => {
                             let parts: Vec<&str> = value.split(',').map(str::trim).collect();
                             if parts.len() == 2 {
-                                if let (Ok(min), Ok(max)) = (parts[0].parse(), parts[1].parse()) {
+                                if let (Ok(min), Ok(max)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
                                     config.particle_mass_range = (min, max);
+                                    Some(true)
+                                } else {
+                                    None
                                 }
+                            } else {
+                                None
                             }
                         }
-                        "inflow_strength" => {
-                            if let Ok(v) = value.parse() {
-                                config.inflow_strength = v;
-                            }
-                        }
-                        "restore_strength" => {
-                            if let Ok(v) = value.parse() {
-                                config.restore_strength = v;
-                            }
-                        }
-                        "galaxy_separation_factor" => {
-                            if let Ok(v) = value.parse() {
-                                config.galaxy_separation_factor = v;
-                            }
-                        }
-                        "prob_merge" => {
-                            if let Ok(v) = value.parse() {
-                                config.prob_merge = v;
-                            }
-                        }
-                        "prob_repeated" => {
-                            if let Ok(v) = value.parse() {
-                                config.prob_repeated = v;
-                            }
-                        }
-                        "prob_flyby" => {
-                            if let Ok(v) = value.parse() {
-                                config.prob_flyby = v;
-                            }
-                        }
-                        "merge_speed_factor" => {
-                            if let Ok(v) = value.parse() {
-                                config.merge_speed_factor = v;
-                            }
-                        }
-                        "repeated_speed_factor" => {
-                            if let Ok(v) = value.parse() {
-                                config.repeated_speed_factor = v;
-                            }
-                        }
-                        "flyby_speed_factor" => {
-                            if let Ok(v) = value.parse() {
-                                config.flyby_speed_factor = v;
-                            }
-                        }
-                        "merge_angle" => {
-                            if let Ok(v) = value.parse() {
-                                config.merge_angle = v;
-                            }
-                        }
-                        "repeated_angle" => {
-                            if let Ok(v) = value.parse() {
-                                config.repeated_angle = v;
-                            }
-                        }
-                        "flyby_angle" => {
-                            if let Ok(v) = value.parse() {
-                                config.flyby_angle = v;
-                            }
-                        }
-                        _ => {}
+                        "inflow_strength" => value.parse::<f32>().ok().map(|v| { config.inflow_strength = v; true }),
+                        "restore_strength" => value.parse::<f32>().ok().map(|v| { config.restore_strength = v; true }),
+                        "galaxy_separation_factor" => value.parse::<f32>().ok().map(|v| { config.galaxy_separation_factor = v; true }),
+                        "prob_merge" => value.parse::<f32>().ok().map(|v| { config.prob_merge = v; true }),
+                        "prob_repeated" => value.parse::<f32>().ok().map(|v| { config.prob_repeated = v; true }),
+                        "prob_flyby" => value.parse::<f32>().ok().map(|v| { config.prob_flyby = v; true }),
+                        "merge_speed_factor" => value.parse::<f32>().ok().map(|v| { config.merge_speed_factor = v; true }),
+                        "repeated_speed_factor" => value.parse::<f32>().ok().map(|v| { config.repeated_speed_factor = v; true }),
+                        "flyby_speed_factor" => value.parse::<f32>().ok().map(|v| { config.flyby_speed_factor = v; true }),
+                        "merge_angle" => value.parse::<f32>().ok().map(|v| { config.merge_angle = v; true }),
+                        "repeated_angle" => value.parse::<f32>().ok().map(|v| { config.repeated_angle = v; true }),
+                        "flyby_angle" => value.parse::<f32>().ok().map(|v| { config.flyby_angle = v; true }),
+                        "collision_interval" => value.parse::<usize>().ok().map(|v| { config.collision_interval = v; true }),
+                        "attract_interval" => value.parse::<usize>().ok().map(|v| { config.attract_interval = v; true }),
+                        "orbital_speed_multiplier" => value.parse::<f32>().ok().map(|v| { config.orbital_speed_multiplier = v; true }),
+                        "spawn_angular_speed_base" => value.parse::<f32>().ok().map(|v| { config.spawn_angular_speed_base = v; true }),
+                        "spawn_angular_speed_range" => value.parse::<f32>().ok().map(|v| { config.spawn_angular_speed_range = v; true }),
+                        "equatorial_growth_factor" => value.parse::<f32>().ok().map(|v| { config.equatorial_growth_factor = v; true }),
+                        "polar_flattening_factor" => value.parse::<f32>().ok().map(|v| { config.polar_flattening_factor = v; true }),
+                        "radius_scale" => value.parse::<f32>().ok().map(|v| { config.radius_scale = v; true }),
+                        "depth_scale_factor" => value.parse::<f32>().ok().map(|v| { config.depth_scale_factor = v; true }),
+                        _ => None,
+                    };
+
+                    if parse_result.is_none() {
+                        eprintln!("⚠ Config Parse-Fehler Zeile {}: '{}' = '{}' (ungültiger Typ)", line_num + 1, key, value);
+                        parse_errors += 1;
                     }
                 }
             }
+        }
+
+        if parse_errors > 0 {
+            eprintln!("⚠ {} Parse-Fehler gefunden. Verwende Fallback-Werte für diese.", parse_errors);
         }
 
         config

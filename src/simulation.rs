@@ -128,8 +128,12 @@ impl Simulation {
 
     pub fn step(&mut self) {
         self.iterate();
-        self.collide();
-        self.attract();
+        if self.frame % self.config.collision_interval == 0 {
+            self.collide();
+        }
+        if self.frame % self.config.attract_interval == 0 {
+            self.attract();
+        }
         if renderer::SPAWN_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
             self.spawn_accretion();
         }
@@ -158,8 +162,8 @@ impl Simulation {
 
     fn apply_hydrodynamic_inflow(&mut self) {
         let outer_r = self.accretion_template.outer_radius.max(1.0);
-        let inflow_strength = 0.025;
-        let restore_strength = 0.08;
+        let inflow_strength = self.config.inflow_strength;
+        let restore_strength = self.config.restore_strength;
 
         self.bodies.par_iter_mut().for_each(|body| {
             let y = body.pos.y;
@@ -327,7 +331,9 @@ impl Simulation {
         let orbital_speed = (acc.mag() * r).sqrt();
         let vel = tangent * orbital_speed;
 
-        let angular_speed = 0.3 + fastrand::f32() * 0.5 + orbital_speed * 0.02;
+        let angular_speed = self.config.spawn_angular_speed_base 
+            + fastrand::f32() * self.config.spawn_angular_speed_range 
+            + orbital_speed * 0.02;
         self.bodies.push(Body::new(
             spawn_pos,
             vel,

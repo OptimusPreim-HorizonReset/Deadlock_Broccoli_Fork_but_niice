@@ -13,3 +13,5 @@ palette = "0.7.6"
 
 parking_lot = "0.12.3"
 once_cell = "1.20.1"
+notify = "6.1"
+crossbeam-channel = "0.5"

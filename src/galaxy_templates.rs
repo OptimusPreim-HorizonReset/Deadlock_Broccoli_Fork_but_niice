@@ -61,13 +61,9 @@ impl GalaxyTemplate {
 
     pub fn from_config(config: &InformationsConfig) -> Self {
         let outer_radius = config.outer_radius;
-        let default_outer_ring_inner = (2.0 / 3.0).sqrt() * outer_radius;
-        let outer_ring_spawn_zone_inner_radius = config
-            .outer_ring_spawn_zone_inner_radius
-            .unwrap_or(default_outer_ring_inner);
-        let outer_ring_spawn_zone_outer_radius = config
-            .outer_ring_spawn_zone_outer_radius
-            .unwrap_or(outer_radius);
+        // Vereinfachte Priority: Nutze nur die Ratios aus der Config
+        let outer_ring_spawn_zone_inner_radius = config.outer_ring_spawn_zone_inner_ratio * outer_radius;
+        let outer_ring_spawn_zone_outer_radius = config.outer_ring_spawn_zone_outer_ratio * outer_radius;
 
         Self {
             n: config.n,
