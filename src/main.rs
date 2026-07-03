@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 mod body;
+mod config;
 mod galaxy_templates;
 mod quadtree;
 mod renderer;
@@ -11,31 +12,35 @@ use renderer::Renderer;
 use simulation::Simulation;
 
 fn main() {
-    let config = quarkstrom::Config {
+    let app_config = quarkstrom::Config {
         window_mode: quarkstrom::WindowMode::Windowed(900, 900),
     };
 
-    let mut simulation = Simulation::new();
+    let sim_config = config::InformationsConfig::load();
+    let sim_config_clone = sim_config.clone();
+    let simulation = Simulation::new(&sim_config);
 
     std::thread::spawn(move || {
-	    loop {
-	        if renderer::PAUSED.load(Ordering::Relaxed) {
-	            std::thread::yield_now();
-	        } else {
-	            simulation.step();
-	        }
-	        render(&mut simulation);
-	    }
+        let mut simulation = simulation;
+        let sim_config = sim_config_clone;
+        loop {
+            if renderer::PAUSED.load(Ordering::Relaxed) {
+                std::thread::yield_now();
+            } else {
+                if renderer::RESET_REQUESTED.swap(false, Ordering::Relaxed) {
+                    simulation = Simulation::new(&sim_config);
+                }
+                simulation.step();
+            }
+            render(&mut simulation);
+        }
     });
 
-    quarkstrom::run::<Renderer>(config);
+    quarkstrom::run::<Renderer>(app_config);
 }
 
 fn render(simulation: &mut Simulation) {
     let mut lock = renderer::UPDATE_LOCK.lock();
-    for body in renderer::SPAWN.lock().drain(..) {
-        simulation.bodies.push(body);
-    }
     {
         let mut lock = renderer::BODIES.lock();
         lock.clear();
@@ -44,7 +49,7 @@ fn render(simulation: &mut Simulation) {
     {
         let mut lock = renderer::QUADTREE.lock();
         lock.clear();
-        lock.extend_from_slice(&simulation.quadtree.nodes);
+        lock.extend_from_slice(&simulation.octree.nodes);
     }
     *lock |= true;
 }

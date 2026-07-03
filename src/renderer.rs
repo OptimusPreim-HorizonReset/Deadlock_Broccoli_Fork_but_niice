@@ -1,17 +1,17 @@
 use std::{
-    f32::consts::{PI, TAU},
+    f32::consts::PI,
     sync::atomic::{AtomicBool, Ordering},
 };
 
 use crate::{
     body::Body,
-    quadtree::{Node, Quadtree},
+    quadtree::{Node, Octree},
 };
 
 use quarkstrom::{egui, winit::event::VirtualKeyCode, winit_input_helper::WinitInputHelper};
 
 use palette::{rgb::Rgba, Hsluv, IntoColor};
-use ultraviolet::Vec2;
+use ultraviolet::{Vec2, Vec3};
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -19,27 +19,29 @@ use parking_lot::Mutex;
 pub static PAUSED: Lazy<AtomicBool> = Lazy::new(|| false.into());
 pub static UPDATE_LOCK: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
+pub static SPAWN_ENABLED: Lazy<AtomicBool> = Lazy::new(|| true.into());
+pub static RESET_REQUESTED: Lazy<AtomicBool> = Lazy::new(|| false.into());
+
 pub static BODIES: Lazy<Mutex<Vec<Body>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static QUADTREE: Lazy<Mutex<Vec<Node>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-pub static SPAWN: Lazy<Mutex<Vec<Body>>> = Lazy::new(|| Mutex::new(Vec::new()));
-
 pub struct Renderer {
-    pos: Vec2,
-    scale: f32,
+    camera_target: Vec3,
+    camera_distance: f32,
+    camera_yaw: f32,
+    camera_pitch: f32,
+    camera_fov: f32,
+    camera_speed: f32,
+    camera_rotate_speed: f32,
+    viewport_size: Vec2,
 
     settings_window_open: bool,
 
     show_bodies: bool,
     show_quadtree: bool,
+    show_spin_axes: bool,
 
     depth_range: (usize, usize),
-
-    spawn_body: Option<Body>,
-    angle: Option<f32>,
-    total: Option<f32>,
-
-    confirmed_bodies: Option<Body>,
 
     bodies: Vec<Body>,
     quadtree: Vec<Node>,
@@ -48,21 +50,22 @@ pub struct Renderer {
 impl quarkstrom::Renderer for Renderer {
     fn new() -> Self {
         Self {
-            pos: Vec2::zero(),
-            scale: 3600.0,
+            camera_target: Vec3::zero(),
+            camera_distance: 600.0,
+            camera_yaw: PI * 0.25,
+            camera_pitch: -0.25,
+            camera_fov: PI / 3.0,
+            camera_speed: 24.0,
+            camera_rotate_speed: 0.0035,
+            viewport_size: Vec2::zero(),
 
             settings_window_open: false,
 
             show_bodies: true,
             show_quadtree: false,
+            show_spin_axes: true,
 
             depth_range: (0, 0),
-
-            spawn_body: None,
-            angle: None,
-            total: None,
-
-            confirmed_bodies: None,
 
             bodies: Vec::new(),
             quadtree: Vec::new(),
@@ -75,6 +78,7 @@ impl quarkstrom::Renderer for Renderer {
             return;
         }
 
+        self.viewport_size = Vec2::new(width as f32, height as f32);
         self.settings_window_open ^= input.key_pressed(VirtualKeyCode::E);
 
         if input.key_pressed(VirtualKeyCode::Space) {
@@ -82,69 +86,52 @@ impl quarkstrom::Renderer for Renderer {
             PAUSED.store(!val, Ordering::Relaxed)
         }
 
-        if let Some((mx, my)) = input.mouse() {
-            // Scroll steps to double/halve the scale
-            let steps = 5.0;
-
-            // Modify input
-            let zoom = (-input.scroll_diff() / steps).exp2();
-
-            // Screen space -> view space
-            let target =
-                Vec2::new(mx * 2.0 - width as f32, height as f32 - my * 2.0) / height as f32;
-
-            // Move view position based on target
-            self.pos += target * self.scale * (1.0 - zoom);
-
-            // Zoom
-            self.scale *= zoom;
+        if input.key_pressed(VirtualKeyCode::X) {
+            let enabled = SPAWN_ENABLED.load(Ordering::Relaxed);
+            SPAWN_ENABLED.store(!enabled, Ordering::Relaxed);
+        }
+        if input.key_pressed(VirtualKeyCode::R) {
+            RESET_REQUESTED.store(true, Ordering::Relaxed);
         }
 
-        // Grab
+        let move_delta = self.camera_speed * 0.04;
+        let (forward, right, up) = self.camera_basis();
+        let mut pan = Vec3::zero();
+        if input.key_held(VirtualKeyCode::W) {
+            pan += forward;
+        }
+        if input.key_held(VirtualKeyCode::S) {
+            pan -= forward;
+        }
+        if input.key_held(VirtualKeyCode::A) {
+            pan -= right;
+        }
+        if input.key_held(VirtualKeyCode::D) {
+            pan += right;
+        }
+        if input.key_held(VirtualKeyCode::Q) {
+            pan -= up;
+        }
+        if input.key_held(VirtualKeyCode::E) {
+            pan += up;
+        }
+        if pan != Vec3::zero() {
+            self.camera_target += pan.normalized() * move_delta;
+        }
+
         if input.mouse_held(2) {
             let (mdx, mdy) = input.mouse_diff();
-            self.pos.x -= mdx / height as f32 * self.scale * 2.0;
-            self.pos.y += mdy / height as f32 * self.scale * 2.0;
+            self.camera_yaw -= mdx * self.camera_rotate_speed;
+            self.camera_pitch = (self.camera_pitch - mdy * self.camera_rotate_speed)
+                .clamp(-PI * 0.42, PI * 0.42);
         }
 
-        let world_mouse = || -> Vec2 {
-            let (mx, my) = input.mouse().unwrap_or_default();
-            let mut mouse = Vec2::new(mx, my);
-            mouse *= 2.0 / height as f32;
-            mouse.y -= 1.0;
-            mouse.y *= -1.0;
-            mouse.x -= width as f32 / height as f32;
-            mouse * self.scale + self.pos
-        };
-
-        if input.mouse_pressed(1) {
-            let mouse = world_mouse();
-            self.spawn_body = Some(Body::new(mouse, Vec2::zero(), 1.0, 1.0));
-            self.angle = None;
-            self.total = Some(0.0);
-        } else if input.mouse_held(1) {
-            if let Some(body) = &mut self.spawn_body {
-                let mouse = world_mouse();
-                if let Some(angle) = self.angle {
-                    let d = mouse - body.pos;
-                    let angle2 = d.y.atan2(d.x);
-                    let a = angle2 - angle;
-                    let a = (a + PI).rem_euclid(TAU) - PI;
-                    let total = self.total.unwrap() - a;
-                    body.mass = (total / TAU).exp2();
-                    self.angle = Some(angle2);
-                    self.total = Some(total);
-                } else {
-                    let d = mouse - body.pos;
-                    let angle = d.y.atan2(d.x);
-                    self.angle = Some(angle);
-                }
-                body.radius = body.mass.cbrt();
-                body.vel = mouse - body.pos;
-            }
-        } else if input.mouse_released(1) {
-            self.confirmed_bodies = self.spawn_body.take();
+        let scroll = input.scroll_diff();
+        if scroll != 0.0 {
+            self.camera_distance = (self.camera_distance * (-scroll * 0.075).exp())
+                .clamp(80.0, 2500.0);
         }
+
     }
 
     fn render(&mut self, ctx: &mut quarkstrom::RenderContext) {
@@ -152,11 +139,9 @@ impl quarkstrom::Renderer for Renderer {
             let mut lock = UPDATE_LOCK.lock();
             if *lock {
                 std::mem::swap(&mut self.bodies, &mut BODIES.lock());
-                std::mem::swap(&mut self.quadtree, &mut QUADTREE.lock());
-            }
-            if let Some(body) = self.confirmed_bodies.take() {
-                self.bodies.push(body);
-                SPAWN.lock().push(body);
+                if self.show_quadtree {
+                    std::mem::swap(&mut self.quadtree, &mut QUADTREE.lock());
+                }
             }
             *lock = false;
         }
@@ -164,32 +149,38 @@ impl quarkstrom::Renderer for Renderer {
         ctx.clear_circles();
         ctx.clear_lines();
         ctx.clear_rects();
-        ctx.set_view_pos(self.pos);
-        ctx.set_view_scale(self.scale);
+        ctx.set_view_pos(Vec2::zero());
+        ctx.set_view_scale(1.0);
+
+        let cam_pos = self.camera_pos();
+        let (forward, right, up) = self.camera_basis();
+        let tan_half = (self.camera_fov * 0.5).tan();
+        let width = self.viewport_size.x.max(1.0);
+        let height = self.viewport_size.y.max(1.0);
+        let aspect = width / height;
 
         if !self.bodies.is_empty() {
             if self.show_bodies {
-                for i in 0..self.bodies.len() {
-                    ctx.draw_circle(self.bodies[i].pos, self.bodies[i].radius, [0xff; 4]);
+                for body in &self.bodies {
+                    if let Some((pos, z)) = self.project_point_basis(body.pos, cam_pos, forward, right, up, tan_half, aspect) {
+                        let radius = body.projected_radius() / (z * tan_half).max(0.01);
+                        ctx.draw_circle(pos, radius, [0xff; 4]);
+                        if self.show_spin_axes {
+                            let axis_len = body.polar_radius / (z * tan_half).max(0.01) * 0.45;
+                            let axis_tip = pos + Vec2::new(0.0, -axis_len);
+                            ctx.draw_line(pos, axis_tip, [0x80, 0xff, 0xff, 0xff]);
+                        }
+                    }
                 }
             }
 
-            if let Some(body) = &self.confirmed_bodies {
-                ctx.draw_circle(body.pos, body.radius, [0xff; 4]);
-                ctx.draw_line(body.pos, body.pos + body.vel, [0xff; 4]);
-            }
-
-            if let Some(body) = &self.spawn_body {
-                ctx.draw_circle(body.pos, body.radius, [0xff; 4]);
-                ctx.draw_line(body.pos, body.pos + body.vel, [0xff; 4]);
-            }
         }
 
         if self.show_quadtree && !self.quadtree.is_empty() {
             let mut depth_range = self.depth_range;
             if depth_range.0 >= depth_range.1 {
                 let mut stack = Vec::new();
-                stack.push((Quadtree::ROOT, 0));
+                stack.push((Octree::ROOT, 0));
 
                 let mut min_depth = usize::MAX;
                 let mut max_depth = 0;
@@ -204,7 +195,7 @@ impl quarkstrom::Renderer for Renderer {
                             max_depth = depth;
                         }
                     } else {
-                        for i in 0..4 {
+                        for i in 0..8 {
                             stack.push((node.children + i, depth + 1));
                         }
                     }
@@ -215,19 +206,19 @@ impl quarkstrom::Renderer for Renderer {
             let (min_depth, max_depth) = depth_range;
 
             let mut stack = Vec::new();
-            stack.push((Quadtree::ROOT, 0));
+            stack.push((Octree::ROOT, 0));
             while let Some((node, depth)) = stack.pop() {
                 let node = &self.quadtree[node];
 
                 if node.is_branch() && depth < max_depth {
-                    for i in 0..4 {
+                    for i in 0..8 {
                         stack.push((node.children + i, depth + 1));
                     }
                 } else if depth >= min_depth {
-                    let quad = node.quad;
-                    let half = Vec2::new(0.5, 0.5) * quad.size;
-                    let min = quad.center - half;
-                    let max = quad.center + half;
+                    let oct = node.oct;
+                    let half = Vec2::new(0.5, 0.5) * oct.size;
+                    let min = oct.center.xy() - half;
+                    let max = oct.center.xy() + half;
 
                     let t = ((depth - min_depth + !node.is_empty() as usize) as f32)
                         / (max_depth - min_depth + 1) as f32;
@@ -249,11 +240,22 @@ impl quarkstrom::Renderer for Renderer {
     }
 
     fn gui(&mut self, ctx: &quarkstrom::egui::Context) {
+        egui::Area::new("spawn_mode")
+            .fixed_pos(egui::pos2(12.0, 12.0))
+            .show(ctx, |ui| {
+                ui.label(format!("Spawn Mode: {}", if SPAWN_ENABLED.load(Ordering::Relaxed) { "ON" } else { "OFF" }));
+                ui.label("Press X to toggle");
+            });
+
         egui::Window::new("")
             .open(&mut self.settings_window_open)
             .show(ctx, |ui| {
                 ui.checkbox(&mut self.show_bodies, "Show Bodies");
+                ui.checkbox(&mut self.show_spin_axes, "Show Rotation Axis");
                 ui.checkbox(&mut self.show_quadtree, "Show Quadtree");
+                ui.label(format!("Particle spawn: {}", if SPAWN_ENABLED.load(Ordering::Relaxed) { "ON" } else { "OFF" }));
+                ui.label("Toggle with X");
+                ui.label("Reset with R");
                 if self.show_quadtree {
                     let range = &mut self.depth_range;
                     ui.horizontal(|ui| {
@@ -264,5 +266,84 @@ impl quarkstrom::Renderer for Renderer {
                     });
                 }
             });
+    }
+}
+
+impl Renderer {
+    fn camera_pos(&self) -> Vec3 {
+        let cos_pitch = self.camera_pitch.cos();
+        let x = self.camera_distance * cos_pitch * self.camera_yaw.cos();
+        let y = self.camera_distance * self.camera_pitch.sin();
+        let z = self.camera_distance * cos_pitch * self.camera_yaw.sin();
+        self.camera_target + Vec3::new(x, y, z)
+    }
+
+    fn camera_basis(&self) -> (Vec3, Vec3, Vec3) {
+        let forward = (self.camera_target - self.camera_pos()).normalized();
+        let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalized();
+        let up = right.cross(forward).normalized();
+        (forward, right, up)
+    }
+
+    fn screen_to_ndc(&self, mouse: Vec2) -> Vec2 {
+        let width = self.viewport_size.x.max(1.0);
+        let height = self.viewport_size.y.max(1.0);
+        Vec2::new(mouse.x / width * 2.0 - 1.0, 1.0 - mouse.y / height * 2.0)
+    }
+
+    fn project_point(&self, point: Vec3) -> Option<(Vec2, f32)> {
+        let cam_pos = self.camera_pos();
+        let (forward, right, up) = self.camera_basis();
+        self.project_point_basis(
+            point,
+            cam_pos,
+            forward,
+            right,
+            up,
+            (self.camera_fov * 0.5).tan(),
+            self.viewport_size.x.max(1.0) / self.viewport_size.y.max(1.0),
+        )
+    }
+
+    fn project_point_basis(
+        &self,
+        point: Vec3,
+        cam_pos: Vec3,
+        forward: Vec3,
+        right: Vec3,
+        up: Vec3,
+        tan_half: f32,
+        aspect: f32,
+    ) -> Option<(Vec2, f32)> {
+        let rel = point - cam_pos;
+        let z = rel.dot(forward);
+        if z <= 0.1 {
+            return None;
+        }
+        let x = rel.dot(right);
+        let y = rel.dot(up);
+        let proj_x = x / (z * tan_half);
+        let proj_y = y / (z * tan_half);
+        let pos = Vec2::new(proj_x * aspect, proj_y);
+        Some((pos, z))
+    }
+
+    fn screen_to_world(&self, mouse: Vec2) -> Vec3 {
+        let ndc = self.screen_to_ndc(mouse);
+        let (forward, right, up) = self.camera_basis();
+        let tan_half = (self.camera_fov * 0.5).tan();
+        let aspect = self.viewport_size.x / self.viewport_size.y;
+        let dir = (right * (ndc.x * aspect * tan_half)
+            + up * (ndc.y * tan_half)
+            + forward)
+            .normalized();
+        let origin = self.camera_pos();
+        let plane_z = self.camera_target.z;
+        let t = (plane_z - origin.z) / dir.z;
+        if t <= 0.0 {
+            origin + dir * self.camera_distance * 0.25
+        } else {
+            origin + dir * t
+        }
     }
 }
