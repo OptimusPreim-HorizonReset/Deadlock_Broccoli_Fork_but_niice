@@ -12,7 +12,7 @@ Diese Datei listet die wichtigsten konfigurierbaren Eigenschaften und Parameter 
 
 dt: 0.02
 theta: 1.0
-epsilon: 1.5
+epsilon: 1.1
 n: 20000
 
 # === GALAXY STRUCTURE ===
@@ -22,7 +22,7 @@ n: 20000
 # particle_mass_range: Min/Max Masse der Disk-Partikel (Format: min, max)
 
 inner_radius: 25.0
-outer_radius: 818.03
+outer_radius: 218.03
 central_mass: 1000000.0
 particle_mass_range: 0.5, 2.0
 
@@ -48,17 +48,17 @@ restore_strength: 0.08
 # prob_repeated: Wahrscheinlichkeit für periodisch wiederkehrende Begegnungen
 # prob_flyby: Wahrscheinlichkeit für intensive Flybys
 
-galaxy_separation_factor: 1.0
-prob_merge: 0.35
+galaxy_separation_factor: 3.0
+prob_merge: 0.30
 prob_repeated: 0.35
-prob_flyby: 0.30
+prob_flyby: 0.35
 
 # === INTERACTION SPEED FACTORS ===
 # merge_speed_factor: Skalierung der Relativgeschwindigkeit für Merge-Szenarien
 # repeated_speed_factor: Skalierung der Relativgeschwindigkeit für wiederkehrende Szenarien
 # flyby_speed_factor: Skalierung der Relativgeschwindigkeit für Flybys
 
-merge_speed_factor: 0.10
+merge_speed_factor: 0.50
 repeated_speed_factor: 0.70
 flyby_speed_factor: 0.90
 
@@ -98,8 +98,10 @@ radius_scale: 0.25
 
 # === DEPTH PERCEPTION ===
 # depth_scale_factor: Faktor für die Z-Position bei der Tiefenwahrnehmung
+# spacetime_dilation_factor: Stärke der Gravitationswellenstrahlung für spiralisierende Annäherung der Zentren (höher = schnellere Spirale)
 
 depth_scale_factor: 0.002
+spacetime_dilation_factor: 0.5
 ```
 
 ## 1. Galaxie-Template / Spawn-Konfiguration

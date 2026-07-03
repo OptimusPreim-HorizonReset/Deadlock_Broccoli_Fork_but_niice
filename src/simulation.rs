@@ -17,6 +17,10 @@ pub struct Simulation {
     /// Template used to derive accretion spawn parameters.
     accretion_template: GalaxyTemplate,
     config: InformationsConfig,
+    /// Index of first galaxy center
+    center1_idx: usize,
+    /// Index of second galaxy center
+    center2_idx: usize,
 }
 
 impl Simulation {
@@ -52,6 +56,7 @@ impl Simulation {
 
         let mut bodies = Vec::with_capacity(bodies1.len() + bodies2.len());
         bodies.extend(bodies1);
+        let center2_idx = bodies.len();
         bodies.extend(bodies2);
 
         let octree = Octree::new(theta, epsilon);
@@ -63,6 +68,8 @@ impl Simulation {
             octree,
             accretion_template,
             config,
+            center1_idx: 0,
+            center2_idx,
         }
     }
 
@@ -133,6 +140,8 @@ impl Simulation {
         }
         if self.frame % self.config.attract_interval == 0 {
             self.attract();
+            // Raumzeitkrümmungs-Dilatation für Center-Partikel überschreibt Teil der Gravitation
+            self.apply_center_spacetime_dilation();
         }
         if renderer::SPAWN_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
             self.spawn_accretion();
@@ -176,6 +185,59 @@ impl Simulation {
             let vertical = -z * restore_strength / outer_r;
             body.acc += ultraviolet::Vec3::new(0.0, lateral, vertical);
         });
+    }
+
+    /// Raumzeitkrümmungs-Dilatation für Center-zu-Center Anziehung mit Spiralisierungs-Effekt
+    /// Die Zentren nähern sich während ihrer Umkreisung an (orbitale Energie-Dissipation)
+    fn apply_center_spacetime_dilation(&mut self) {
+        if self.center1_idx >= self.bodies.len() || self.center2_idx >= self.bodies.len() {
+            return;
+        }
+
+        let center1_pos = self.bodies[self.center1_idx].pos;
+        let center1_vel = self.bodies[self.center1_idx].vel;
+        let center1_mass = self.bodies[self.center1_idx].mass;
+        let center2_pos = self.bodies[self.center2_idx].pos;
+        let center2_vel = self.bodies[self.center2_idx].vel;
+        let center2_mass = self.bodies[self.center2_idx].mass;
+
+        let delta = center2_pos - center1_pos;
+        let distance = delta.mag();
+
+        if distance < 1e-6 {
+            return; // Zu nah, ignoriere
+        }
+
+        let direction = delta.normalized();
+        
+        // 1. GRAVITATIONS-KRAFT (anziehendes Potential)
+        // Stärke erhöht um Annäherung zu forcieren
+        let force_magnitude = (center1_mass * center2_mass) / (distance * distance);
+        let grav_force = direction * force_magnitude;
+
+        // 2. DISSIPATIONS-KRAFT (Gravitationswellenstrahlung simulieren)
+        // Entzieht dem System Energie basierend auf Relativgeschwindigkeit und Abstand
+        let rel_vel = center2_vel - center1_vel;
+        let radial_vel = rel_vel.dot(direction); // Nur die radiale Komponente
+        
+        // Dissipation ist stark, wenn Relative-Geschwindigkeit hoch ist und Abstand klein ist
+        // Dies führt zu einer Spirale ins Zentrum
+        let dissipation_factor = self.config.spacetime_dilation_factor * 0.001; // Bremsfaktor
+        let dissipation_force = -direction * (radial_vel.abs() * force_magnitude * dissipation_factor);
+
+        // 3. GESAMTKRAFT = Gravitation + Dissipation
+        let total_force = grav_force + dissipation_force;
+
+        // Wende Kraft auf beide Center an (in entgegengesetzter Richtung)
+        if self.center1_idx < self.bodies.len() {
+            self.bodies[self.center1_idx].acc += total_force / center1_mass.max(1.0);
+        }
+        if self.center2_idx < self.bodies.len() {
+            self.bodies[self.center2_idx].acc -= total_force / center2_mass.max(1.0);
+        }
+
+        eprintln!("🌌 Spiral: dist={:.2}, grav={:.2}, dissipation={:.2}", 
+                 distance, force_magnitude, dissipation_force.mag());
     }
 
     pub fn iterate(&mut self) {

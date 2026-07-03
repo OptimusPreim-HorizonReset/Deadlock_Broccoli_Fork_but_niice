@@ -36,6 +36,7 @@ pub struct InformationsConfig {
     pub polar_flattening_factor: f32,
     pub radius_scale: f32,
     pub depth_scale_factor: f32,
+    pub spacetime_dilation_factor: f32,
 }
 
 impl Default for InformationsConfig {
@@ -72,8 +73,7 @@ impl Default for InformationsConfig {
             equatorial_growth_factor: 0.18,
             polar_flattening_factor: 0.14,
             radius_scale: 0.25,
-            depth_scale_factor: 0.002,
-        }
+            depth_scale_factor: 0.002,            spacetime_dilation_factor: 2.0,        }
     }
 }
 
@@ -176,6 +176,7 @@ impl InformationsConfig {
                         "polar_flattening_factor" => value.parse::<f32>().ok().map(|v| { config.polar_flattening_factor = v; true }),
                         "radius_scale" => value.parse::<f32>().ok().map(|v| { config.radius_scale = v; true }),
                         "depth_scale_factor" => value.parse::<f32>().ok().map(|v| { config.depth_scale_factor = v; true }),
+                        "spacetime_dilation_factor" => value.parse::<f32>().ok().map(|v| { config.spacetime_dilation_factor = v; true }),
                         _ => None,
                     };
 
